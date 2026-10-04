@@ -19,19 +19,9 @@
       margin:0 auto;
       padding:28px 0 44px;
     }
-    .brand{
-      text-align:center;
-      margin-bottom:18px;
-    }
-    .brand h1{
-      margin:0;
-      font-size:30px;
-      color:#16477c;
-    }
-    .brand p{
-      margin:5px 0 0;
-      color:#6b7f98;
-    }
+    .brand{text-align:center;margin-bottom:18px}
+    .brand h1{margin:0;font-size:30px;color:#16477c}
+    .brand p{margin:5px 0 0;color:#6b7f98}
     .card{
       background:#fff;
       border:1px solid #d3dfec;
@@ -39,11 +29,7 @@
       padding:20px;
       box-shadow:0 10px 28px rgba(36,73,112,.08);
     }
-    label{
-      display:block;
-      font-weight:700;
-      margin:0 0 7px;
-    }
+    label{display:block;font-weight:700;margin:0 0 7px}
     input{
       width:100%;
       height:50px;
@@ -66,14 +52,12 @@
       font-size:16px;
       font-weight:800;
       cursor:pointer;
+      min-height:48px;
     }
     .primary{background:#287be0;color:white}
     .green{background:#16a66a;color:white}
     .secondary{background:#e8f0fa;color:#174878}
-    #scannerBox{
-      display:none;
-      margin-top:16px;
-    }
+    #scannerBox{display:none;margin-top:16px}
     #reader{
       overflow:hidden;
       border-radius:14px;
@@ -93,12 +77,22 @@
       font-size:13px;
       text-align:center;
     }
+    .session{
+      margin-bottom:12px;
+      padding:12px;
+      border-radius:12px;
+      background:#eaf7f2;
+      color:#11724e;
+      text-align:center;
+      font-weight:800;
+    }
     .manual{
       display:none;
       margin-top:18px;
       border-top:1px solid #e2e8f0;
       padding-top:16px;
     }
+    #pairing{display:none}
   </style>
 </head>
 <body>
@@ -109,17 +103,21 @@
   </div>
 
   <div class="card">
-    <label for="session">Código de conexión</label>
-    <input id="session" inputmode="numeric" maxlength="6" placeholder="Ej. 482193">
+    <div id="pairedInfo" class="session" style="display:none"></div>
 
-    <button class="primary" id="connectBtn">Conectar y abrir cámara</button>
+    <div id="pairing">
+      <label for="session">Código de conexión</label>
+      <input id="session" inputmode="numeric" maxlength="6" placeholder="Ej. 482193">
+    </div>
+
+    <button class="primary" id="connectBtn">Abrir cámara</button>
 
     <div id="scannerBox">
       <div id="reader"></div>
       <button class="secondary" id="stopBtn">Detener cámara</button>
     </div>
 
-    <div id="status">Escribe el código que muestra SaludStock en la PC.</div>
+    <div id="status">Abre esta página escaneando el QR de SaludStock.</div>
 
     <div class="manual" id="manualBox">
       <label for="manualCode">Código manual</label>
@@ -128,7 +126,8 @@
     </div>
 
     <div class="hint">
-      Mantén el código de barras centrado, con buena luz y sin reflejos.
+      Esta conexión sirve para varios productos. No necesitas volver a escanear
+      el QR hasta que cierres la conexión en la PC.
     </div>
   </div>
 </div>
@@ -139,7 +138,12 @@ const SUPABASE_KEY = "sb_publishable_o6ZOZV8KktcjJei9eApATQ_l_YhyFsX";
 
 const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+const params = new URLSearchParams(window.location.search);
+const sessionFromQr = (params.get("session") || "").trim();
+
 const sessionInput = document.getElementById("session");
+const pairing = document.getElementById("pairing");
+const pairedInfo = document.getElementById("pairedInfo");
 const connectBtn = document.getElementById("connectBtn");
 const stopBtn = document.getElementById("stopBtn");
 const scannerBox = document.getElementById("scannerBox");
@@ -149,22 +153,37 @@ const manualCode = document.getElementById("manualCode");
 const sendManual = document.getElementById("sendManual");
 
 let scanner = null;
-let activeSession = "";
+let activeSession = sessionFromQr;
 let lastCode = "";
 let lastSentAt = 0;
+let sentCount = 0;
 
 function status(text, ok=true) {
   statusEl.textContent = text;
   statusEl.className = ok ? "ok" : "bad";
 }
 
+function setupPairingUi() {
+  if (/^\d{6}$/.test(activeSession)) {
+    pairing.style.display = "none";
+    pairedInfo.style.display = "block";
+    pairedInfo.textContent = "✓ Conectado a SaludStock";
+    status("Pulsa «Abrir cámara» y empieza a escanear.", true);
+  } else {
+    pairing.style.display = "block";
+    pairedInfo.style.display = "none";
+    status("No llegó un código de conexión. Escríbelo manualmente.", false);
+  }
+}
+
 async function sendBarcode(code) {
   const now = Date.now();
+  code = String(code || "").trim();
 
   if (!code) return;
 
-  // Evita que la cámara mande el mismo código 20 veces por segundo.
-  if (code === lastCode && now - lastSentAt < 2500) return;
+  // Evita muchas lecturas idénticas mientras el producto sigue frente a cámara.
+  if (code === lastCode && now - lastSentAt < 1800) return;
 
   lastCode = code;
   lastSentAt = now;
@@ -180,28 +199,35 @@ async function sendBarcode(code) {
   }
 
   if (!data) {
-    status("La conexión venció. Genera un código nuevo en la PC.", false);
+    status("La conexión venció o fue cerrada en la PC.", false);
     return;
   }
 
-  if (navigator.vibrate) navigator.vibrate(120);
-  status("✓ Enviado a SaludStock: " + code, true);
+  sentCount += 1;
+  if (navigator.vibrate) navigator.vibrate(100);
+
+  status(
+    "✓ Producto #" + sentCount + " enviado: " + code +
+    ". Puedes escanear el siguiente.",
+    true
+  );
 }
 
 async function startScanner() {
-  const code = sessionInput.value.trim();
+  if (!activeSession) {
+    activeSession = sessionInput.value.trim();
+  }
 
-  if (!/^\d{6}$/.test(code)) {
+  if (!/^\d{6}$/.test(activeSession)) {
     status("El código de conexión debe tener 6 números.", false);
     return;
   }
 
-  activeSession = code;
+  setupPairingUi();
+
   scannerBox.style.display = "block";
   manualBox.style.display = "block";
   connectBtn.disabled = true;
-
-  scanner = new Html5Qrcode("reader");
 
   const formats = [
     Html5QrcodeSupportedFormats.EAN_13,
@@ -213,22 +239,27 @@ async function startScanner() {
     Html5QrcodeSupportedFormats.ITF
   ];
 
+  scanner = new Html5Qrcode(
+    "reader",
+    { formatsToSupport: formats, verbose: false }
+  );
+
   try {
     await scanner.start(
       { facingMode: "environment" },
       {
         fps: 10,
         qrbox: { width: 300, height: 150 },
-        formatsToSupport: formats,
         aspectRatio: 1.7778
       },
       decodedText => sendBarcode(decodedText),
       () => {}
     );
 
-    status("Cámara lista. Apunta al código de barras.", true);
+    status("Cámara lista. Escanea todos los productos que necesites.", true);
   } catch (err) {
     connectBtn.disabled = false;
+    scannerBox.style.display = "none";
     status(
       "No se pudo abrir la cámara. Revisa el permiso del navegador. " +
       (err?.message || err),
@@ -246,7 +277,10 @@ async function stopScanner() {
   scanner = null;
   scannerBox.style.display = "none";
   connectBtn.disabled = false;
-  status("Cámara detenida.", true);
+  status(
+    "Cámara detenida. La conexión sigue activa; puedes abrirla otra vez.",
+    true
+  );
 }
 
 connectBtn.addEventListener("click", startScanner);
@@ -257,6 +291,8 @@ sendManual.addEventListener("click", () => {
   manualCode.value = "";
   manualCode.focus();
 });
+
+setupPairingUi();
 </script>
 </body>
 </html>
